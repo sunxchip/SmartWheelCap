@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import 'package:wheelcap/data/datasources/sensor_data_source.dart';
@@ -37,6 +38,19 @@ class BluetoothSensorDataSource implements SensorDataSource {
         _scanAndConnect();
       }
     });
+
+    // [임시 디버그] 스캔되는 모든 기기를 콘솔에 출력해 매칭 실패 원인을 확인한다.
+    // 원인 파악 후 제거할 것.
+    FlutterBluePlus.onScanResults.listen((results) {
+      for (final r in results) {
+        debugPrint(
+          '[ProxAlert][scan] advName="${r.advertisementData.advName}" '
+          'platformName="${r.device.platformName}" '
+          'services=${r.advertisementData.serviceUuids} '
+          'rssi=${r.rssi}',
+        );
+      }
+    });
   }
 
   Future<void> _scanAndConnect() async {
@@ -45,20 +59,29 @@ class BluetoothSensorDataSource implements SensorDataSource {
     _emitStatus(BleConnectionStatus.scanning);
 
     try {
+      // [임시 디버그] 네이티브 스캔 필터(withServices/withNames)를 빼고
+      // 무필터로 스캔해, 주변에 광고가 잡히는지 / ProxAlert가 보이는지 확인.
+      // 원인 파악 후 필터를 다시 추가할 것.
       await FlutterBluePlus.startScan(
-        withServices: [_serviceUuid],
-        withNames: [_deviceName],
         timeout: _scanTimeout,
       );
 
+      // 광고 패킷(31바이트 제한)에 128bit 서비스 UUID + 기기 이름을 모두
+      // 담으면 용량을 초과해 펌웨어가 이름을 잘라내거나 빼는 경우가 있다.
+      // 그래서 이름 일치만으로 판단하지 않고, addServiceUUID()로 펌웨어가
+      // 보장하는 서비스 UUID 매칭을 1차 기준으로 삼는다.
       final result = await FlutterBluePlus.onScanResults
           .expand((results) => results)
-          .firstWhere((r) => r.advertisementData.advName == _deviceName || r.device.platformName == _deviceName)
+          .firstWhere((r) =>
+              r.advertisementData.serviceUuids.contains(_serviceUuid) ||
+              r.advertisementData.advName == _deviceName ||
+              r.device.platformName == _deviceName)
           .timeout(_scanTimeout);
 
       await FlutterBluePlus.stopScan();
       await _connect(result.device);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[ProxAlert] scan failed: $e');
       await FlutterBluePlus.stopScan();
       _busy = false;
       _scheduleReconnect();
@@ -95,7 +118,8 @@ class BluetoothSensorDataSource implements SensorDataSource {
 
       _busy = false;
       _emitStatus(BleConnectionStatus.connected);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[ProxAlert] connect failed: $e');
       _busy = false;
       await device.disconnect();
       _scheduleReconnect();
