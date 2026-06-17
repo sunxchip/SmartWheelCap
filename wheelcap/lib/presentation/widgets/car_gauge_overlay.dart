@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import 'package:wheelcap/domain/entities/wheel_position.dart';
 import 'package:wheelcap/domain/entities/wheel_sensor_data.dart';
 import 'package:wheelcap/presentation/widgets/wheel_gauge.dart';
 
@@ -35,6 +36,9 @@ class CarGaugeOverlay extends StatelessWidget {
   static const double _rearAxleFrac  = 0.70;
 
   static const double _gs = 100.0; // gauge widget size (square)
+
+  int? _intensityFor(WheelPosition position) =>
+      data.activePosition == position ? data.intensity : null;
 
   @override
   Widget build(BuildContext context) {
@@ -70,7 +74,7 @@ class CarGaugeOverlay extends StatelessWidget {
             left: carLeft - _gs,
             top:  frontY  - _gs,
             child: WheelGauge(
-              distanceCm:     data.frontLeft,
+              intensity:      _intensityFor(WheelPosition.frontLeft),
               startAngle:     pi,
               sweepAngle:     pi / 2,
               centerFraction: const Offset(1.0, 1.0),
@@ -84,7 +88,7 @@ class CarGaugeOverlay extends StatelessWidget {
             left: carRight,
             top:  frontY - _gs,
             child: WheelGauge(
-              distanceCm:     data.frontRight,
+              intensity:      _intensityFor(WheelPosition.frontRight),
               startAngle:     3 * pi / 2,
               sweepAngle:     pi / 2,
               centerFraction: const Offset(0.0, 1.0),
@@ -98,7 +102,7 @@ class CarGaugeOverlay extends StatelessWidget {
             left: carLeft - _gs,
             top:  rearY,
             child: WheelGauge(
-              distanceCm:     data.rearLeft,
+              intensity:      _intensityFor(WheelPosition.rearLeft),
               startAngle:     pi / 2,
               sweepAngle:     pi / 2,
               centerFraction: const Offset(1.0, 0.0),
@@ -112,7 +116,7 @@ class CarGaugeOverlay extends StatelessWidget {
             left: carRight,
             top:  rearY,
             child: WheelGauge(
-              distanceCm:     data.rearRight,
+              intensity:      _intensityFor(WheelPosition.rearRight),
               startAngle:     0,
               sweepAngle:     pi / 2,
               centerFraction: const Offset(0.0, 0.0),

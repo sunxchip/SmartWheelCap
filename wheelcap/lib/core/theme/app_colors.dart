@@ -12,9 +12,10 @@ abstract class AppColors {
   static const Color caution = Colors.yellow;
   static const Color danger  = Colors.red;
 
-  static Color forDistance(double distCm) {
-    if (distCm > 80)  return safe;
-    if (distCm >= 40) return caution;
+  /// intensity: 0~100 (ProxAlert 값). 높을수록 위험.
+  static Color forIntensity(int intensity) {
+    if (intensity < 35) return safe;
+    if (intensity < 90) return caution;
     return danger;
   }
 }

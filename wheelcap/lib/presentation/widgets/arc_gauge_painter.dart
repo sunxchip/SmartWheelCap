@@ -13,26 +13,29 @@ import 'package:flutter/material.dart';
 ///  RL → centerFraction (1, 0)  sweep π/2 → π     lower-left
 ///  RR → centerFraction (0, 0)  sweep 0   → π/2   lower-right
 class WheelArcPainter extends CustomPainter {
-  final double distanceCm;
+  /// ProxAlert intensity (0~100). null = this corner has no live sensor.
+  final double? intensity;
   final double startAngle;
   final double sweepAngle;
   final Offset centerFraction;
 
   // Outer → inner
   static const List<double> _radii      = [70, 52, 34, 16];
-  static const List<double> _thresholds = [140, 100, 65, 35];
+  // Minimum intensity required to light each band, outer → inner.
+  static const List<double> _thresholds = [1, 35, 65, 90];
   static const List<Color>  _colors = [
     Color(0xFF43A047), // green  — outermost / safe
     Color(0xFFFFD600), // yellow
     Color(0xFFFF6F00), // orange
     Color(0xFFE53935), // red    — innermost / danger
   ];
+  static const Color _placeholderColor = Color(0xFF4B5563);
 
   static const double _sw     = 14.0; // stroke width
   static const double _labelR = 82.0; // label radius (outside outermost band)
 
   const WheelArcPainter({
-    required this.distanceCm,
+    required this.intensity,
     required this.startAngle,
     required this.sweepAngle,
     required this.centerFraction,
@@ -45,9 +48,11 @@ class WheelArcPainter extends CustomPainter {
       centerFraction.dy * size.height,
     );
 
+    final value = intensity;
+
     // Draw outer → inner so inner arcs render on top
     for (int i = 0; i < _radii.length; i++) {
-      final active = distanceCm <= _thresholds[i];
+      final active = value != null && value >= _thresholds[i];
       canvas.drawArc(
         Rect.fromCircle(center: c, radius: _radii[i]),
         startAngle,
@@ -57,7 +62,9 @@ class WheelArcPainter extends CustomPainter {
           ..style       = PaintingStyle.stroke
           ..strokeWidth = _sw
           ..strokeCap   = StrokeCap.butt
-          ..color       = active ? _colors[i] : _colors[i].withOpacity(0.10),
+          ..color       = value == null
+              ? _placeholderColor.withValues(alpha: 0.12)
+              : (active ? _colors[i] : _colors[i].withValues(alpha: 0.10)),
       );
     }
 
@@ -71,31 +78,42 @@ class WheelArcPainter extends CustomPainter {
       c.dy + _labelR * sin(mid),
     );
 
+    final value = intensity;
+
     final tp = TextPainter(
       textDirection: ui.TextDirection.ltr,
-      text: TextSpan(children: [
-        TextSpan(
-          text: '${distanceCm.toInt()}',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            height: 1.0,
-          ),
-        ),
-        TextSpan(
-          text: 'cm',
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.45),
-            fontSize: 9,
-          ),
-        ),
-      ]),
+      text: value == null
+          ? TextSpan(
+              text: '–',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.35),
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : TextSpan(children: [
+              TextSpan(
+                text: '${value.toInt()}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  height: 1.0,
+                ),
+              ),
+              TextSpan(
+                text: '%',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.45),
+                  fontSize: 9,
+                ),
+              ),
+            ]),
     )..layout();
 
     tp.paint(canvas, pos - Offset(tp.width / 2, tp.height / 2));
   }
 
   @override
-  bool shouldRepaint(WheelArcPainter old) => old.distanceCm != distanceCm;
+  bool shouldRepaint(WheelArcPainter old) => old.intensity != intensity;
 }
