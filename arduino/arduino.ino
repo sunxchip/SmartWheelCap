@@ -13,7 +13,7 @@ uint8_t lastIntensity = 0xFF;
 const float MAX_ALERT_DIST = 150.0f;  
 
 float readDistanceCm() {
-  // ESP32의 백그라운드 작업(BLE 등)이 잠시 숨 돌릴 틈을 줌 (신호 누락 방지)
+  //신호 누락 방지
   yield(); 
 
   digitalWrite(TRIG_PIN, LOW);
@@ -22,7 +22,7 @@ float readDistanceCm() {
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  // ⭐️ 타임아웃을 60000us(60ms)로 대폭 상향!
+  //  타임아웃을 60000us(60ms)로 대폭 상향
   // 블루투스 지연이 발생해도 50cm 이상의 반사파를 놓치지 않고 끝까지 기다림
   unsigned long duration = pulseIn(ECHO_PIN, HIGH, 60000);
   
@@ -90,7 +90,7 @@ void loop() {
     if (val < 0.0f) s[i] = 999.0f;
     else s[i] = val;
     
-    //  샘플링 간격을 60ms로 늘려서 이전 초음파 잔향과 BLE 간섭 최소화
+    // 샘플링 간격을 60ms로 늘려서 이전 초음파 잔향과 BLE 간섭 최소화
     delay(60); 
   }
   
@@ -103,16 +103,26 @@ void loop() {
     lastIntensity = intensity;
   }
 
-  // 출력 구조
+  // ============== [수정된 출력 구조] ==============
   if (cm > 900.0f) {
+    // 측정 범위를 벗어났을 때 (에러 또는 너무 멀 때)
     Serial.println("distance: Safe (> 1.5m) | intensity: 0");
-  } else {
+  } 
+  else if (cm <= 30.0f) {
+    // 30cm 이내로 들어왔을 때 경고 메시지 출력
+    Serial.print("⚠️ [경고] 물체가 너무 가깝습니다! 현재 거리: ");
+    Serial.print(cm, 1);
+    Serial.println(" cm");
+  } 
+  else {
+    // 30cm 초과일 때 정상적인 측정값 출력
     Serial.print("distance: ");
     Serial.print(cm, 1);
     Serial.print(" cm  | intensity: ");
     Serial.println(intensity);
   }
+  // ================================================
 
-  // 전체 루프 대기 시간도 조금 더 여유 있게 변경
-  delay(100);
+  // 전체 루프 대기 시간
+  delay(200);
 }
