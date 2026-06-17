@@ -1,68 +1,149 @@
 import 'dart:async';
 
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
 import 'package:wheelcap/data/datasources/sensor_data_source.dart';
+import 'package:wheelcap/domain/entities/ble_connection_status.dart';
+import 'package:wheelcap/domain/entities/wheel_position.dart';
 import 'package:wheelcap/domain/entities/wheel_sensor_data.dart';
 
-/// TODO: BLE 연동 구현체
-///   1. flutter_blue_plus
-///   2. DashboardScreen 에서 MockSensorDataSource 대신 이 클래스 교체
-///   3. scanAndConnect() 를 호출해 기기를 연결
-
-
+/// ProxAlert(ESP32-C3) 펌웨어와 BLE로 통신하는 실제 데이터 소스.
+///
+/// 디바이스 이름 "ProxAlert"를 스캔 → 연결 → 서비스/특성 탐색 → notify 구독
+/// 순서로 진행하며, 연결이 끊기면 자동으로 재스캔을 시도한다.
 class BluetoothSensorDataSource implements SensorDataSource {
-  final _controller = StreamController<WheelSensorData>.broadcast();
+  static final Guid _serviceUuid = Guid('12345678-1234-1234-1234-1234567890ab');
+  static final Guid _characteristicUuid = Guid('12345678-1234-1234-1234-1234567890ac');
+  static const String _deviceName = 'ProxAlert';
+
+  static const Duration _scanTimeout = Duration(seconds: 8);
+  static const Duration _connectTimeout = Duration(seconds: 10);
+  static const Duration _reconnectDelay = Duration(seconds: 2);
+
+  final _dataController = StreamController<WheelSensorData>.broadcast();
+  final _statusController = StreamController<BleConnectionStatus>.broadcast();
+
+  StreamSubscription<BluetoothConnectionState>? _connectionSub;
+  StreamSubscription<List<int>>? _valueSub;
+  StreamSubscription<BluetoothAdapterState>? _adapterSub;
+
+  BluetoothDevice? _device;
+  bool _disposed = false;
+  bool _busy = false;
 
   BluetoothSensorDataSource() {
-    // 나중에 활성화
-    // scanAndConnect();
+    _adapterSub = FlutterBluePlus.adapterState.listen((state) {
+      if (state == BluetoothAdapterState.on) {
+        _scanAndConnect();
+      }
+    });
   }
 
-  /// BLE 기기 검색 및 연결
-  Future<void> scanAndConnect() async {
-    // import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-    //
-    // await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
-    // FlutterBluePlus.scanResults.listen((results) {
-    //   for (final r in results) {
-    //     if (r.device.platformName == 'SmartWheelCap') {
-    //       FlutterBluePlus.stopScan();
-    //       _connectToDevice(r.device);
-    //     }
-    //   }
-    // });
+  Future<void> _scanAndConnect() async {
+    if (_disposed || _busy) return;
+    _busy = true;
+    _emitStatus(BleConnectionStatus.scanning);
+
+    try {
+      await FlutterBluePlus.startScan(
+        withServices: [_serviceUuid],
+        withNames: [_deviceName],
+        timeout: _scanTimeout,
+      );
+
+      final result = await FlutterBluePlus.onScanResults
+          .expand((results) => results)
+          .firstWhere((r) => r.advertisementData.advName == _deviceName || r.device.platformName == _deviceName)
+          .timeout(_scanTimeout);
+
+      await FlutterBluePlus.stopScan();
+      await _connect(result.device);
+    } catch (_) {
+      await FlutterBluePlus.stopScan();
+      _busy = false;
+      _scheduleReconnect();
+    }
   }
 
-  // void _connectToDevice(BluetoothDevice device) async {
-  //   await device.connect();
-  //   final services = await device.discoverServices();
-  //   for (final service in services) {
-  //     for (final char in service.characteristics) {
-  //       if (char.properties.notify) {
-  //         await char.setNotifyValue(true);
-  //         char.onValueReceived.listen((bytes) {
-  //           // bytes 파싱 후 스트림에 주입
-  //           // 이 부분에 Bluetooth stream 데이터를 주입
-  //           // _controller.add(_parseBytes(bytes));
-  //         });
-  //       }
-  //     }
-  //   }
-  // }
+  Future<void> _connect(BluetoothDevice device) async {
+    _device = device;
+    _emitStatus(BleConnectionStatus.connecting);
 
-  // WheelSensorData _parseBytes(List<int> bytes) {
-  //   // TODO: 아두이노 파싱
-  //   // ex: [fl_hi, fl_lo, fr_hi, fr_lo, rl_hi, rl_lo, rr_hi, rr_lo]
-  //   return WheelSensorData(
-  //     frontLeft:  ((bytes[0] << 8) | bytes[1]).toDouble(),
-  //     frontRight: ((bytes[2] << 8) | bytes[3]).toDouble(),
-  //     rearLeft:   ((bytes[4] << 8) | bytes[5]).toDouble(),
-  //     rearRight:  ((bytes[6] << 8) | bytes[7]).toDouble(),
-  //   );
-  // }
+    try {
+      // 비영리/개인 프로젝트 용도. 상업적으로 배포할 경우
+      // License.commercial 라이선스 구매가 필요하다.
+      await device.connect(license: License.nonprofit, timeout: _connectTimeout);
+
+      final services = await device.discoverServices();
+      final service = services.firstWhere((s) => s.uuid == _serviceUuid);
+      final characteristic = service.characteristics.firstWhere((c) => c.uuid == _characteristicUuid);
+
+      await characteristic.setNotifyValue(true);
+
+      _valueSub?.cancel();
+      _valueSub = characteristic.lastValueStream.listen((bytes) {
+        if (bytes.isEmpty) return;
+        _emitIntensity(bytes[0].clamp(0, 100));
+      });
+
+      // 연결 성공 *이후*에 구독해야 스트림의 "현재 상태 재방출" 동작 때문에
+      // 가짜 disconnected 이벤트가 즉시 발생하는 것을 피할 수 있다.
+      _connectionSub?.cancel();
+      _connectionSub = device.connectionState
+          .where((s) => s == BluetoothConnectionState.disconnected)
+          .listen((_) => _handleUnexpectedDisconnect());
+
+      _busy = false;
+      _emitStatus(BleConnectionStatus.connected);
+    } catch (_) {
+      _busy = false;
+      await device.disconnect();
+      _scheduleReconnect();
+    }
+  }
+
+  void _handleUnexpectedDisconnect() {
+    _connectionSub?.cancel();
+    _connectionSub = null;
+    _valueSub?.cancel();
+    _valueSub = null;
+
+    if (_disposed) return;
+    _emitStatus(BleConnectionStatus.disconnected);
+    _emitIntensity(null);
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_disposed) return;
+    Future.delayed(_reconnectDelay, _scanAndConnect);
+  }
+
+  void _emitIntensity(int? intensity) {
+    if (_disposed) return;
+    _dataController.add(WheelSensorData(activePosition: activeWheelPosition, intensity: intensity));
+  }
+
+  void _emitStatus(BleConnectionStatus status) {
+    if (_disposed) return;
+    _statusController.add(status);
+  }
 
   @override
-  Stream<WheelSensorData> get dataStream => _controller.stream;
+  Stream<WheelSensorData> get dataStream => _dataController.stream;
 
   @override
-  void dispose() => _controller.close();
+  Stream<BleConnectionStatus> get connectionStatusStream => _statusController.stream;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _adapterSub?.cancel();
+    _connectionSub?.cancel();
+    _valueSub?.cancel();
+    FlutterBluePlus.stopScan();
+    _device?.disconnect();
+    _dataController.close();
+    _statusController.close();
+  }
 }
