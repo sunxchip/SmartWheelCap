@@ -69,11 +69,26 @@ void setupBLE() {
 
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(SVC_UUID);
-  adv->start();
+
+  // 기기 이름은 기본 광고 패킷이 아니라 스캔 응답(scan response) 패킷에 담는다.
+  // enableScanResponse(true)를 먼저 호출해야 setName()이 이름을 스캔 응답 쪽에
+  // 넣는다. 기본 광고 패킷은 Flags + 서비스 UUID만 남아 31바이트 제한에
+  // 여유 있게 들어간다.
+  adv->enableScanResponse(true);
+  adv->setName("ProxAlert");
+
+  bool advOk = adv->start();
+  Serial.print("[BLE] advertising start: ");
+  Serial.println(advOk ? "OK" : "FAIL");
+  Serial.print("[BLE] address: ");
+  Serial.println(NimBLEDevice::getAddress().toString().c_str());
 }
 
 void setup() {
   Serial.begin(115200);
+  // ESP32-C3는 네이티브 USB-CDC라 시리얼 모니터가 연결되기 전에 찍히는
+  // 초반 로그가 그냥 버려질 수 있다. BLE 시작 로그를 보기 위해 잠깐 대기.
+  delay(1000);
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
